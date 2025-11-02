@@ -25,6 +25,15 @@ func FormatHM(d time.Duration) string {
 // are added or removed.
 type Durations []time.Time
 
+// Last returns the last time.Time value in the Durations collection.
+// If the collection is empty, it returns the zero value of time.Time.
+func (durations Durations) Last() time.Time {
+	if len(durations) == 0 {
+		return time.Time{}
+	}
+	return durations[len(durations)-1]
+}
+
 // sortTimesAscending sorts a slice of time.Time values in ascending order.
 // This is an internal helper used to maintain chronological order of Durations.
 func sortTimesAscending(times []time.Time) {

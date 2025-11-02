@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -66,7 +67,31 @@ type model struct {
 	durations         timeutils.Durations
 	total             time.Duration
 	totalProvisionnal time.Duration
+	overtime          time.Duration
+	planned           string
+	percentage        float64
 	quitting          bool
+	progress          progress.Model
+}
+
+func RecalculateDurations(m model) model {
+	m.totalProvisionnal = timeutils.SumPairedDurationsWithNow(m.durations, time.Now())
+	m.total = timeutils.SumPairedDurationsWithNow(m.durations, time.Time{})
+	m.overtime = m.total - target
+	last := m.durations.Last()
+	if !last.IsZero() {
+		remaining := target - m.total
+		m.planned = last.Add(remaining).Format("15:04")
+	}
+
+	tmin := m.total.Minutes()
+	ta := target.Minutes()
+	if tmin > ta {
+		m.percentage = 1
+	} else {
+		m.percentage = ((tmin * 100) / ta) / 100
+	}
+	return m
 }
 
 func initialModel() model {
@@ -77,7 +102,7 @@ func initialModel() model {
 	ti.Width = 20
 
 	l := list.New([]list.Item{}, itemDelegate{}, defaultWidth, listHeight)
-	l.Title = "How is your day going ?"
+	l.Title = ""
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
 	l.Styles.Title = titleStyle
@@ -99,6 +124,7 @@ func initialModel() model {
 		total:             0,
 		totalProvisionnal: 0,
 		quitting:          false,
+		progress:          progress.New(progress.WithScaledGradient("#FF7CCB", "#FDFF8C")),
 	}
 }
 
@@ -110,6 +136,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.list.SetWidth(msg.Width)
+		m.progress.Width = msg.Width - padding*2 - 4
+		if m.progress.Width > maxWidth {
+			m.progress.Width = maxWidth
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -131,13 +161,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.list.SetItems(items)
 			m.textInput.Reset()
-			m.totalProvisionnal = timeutils.SumPairedDurationsWithNow(m.durations, time.Now())
-			m.total = timeutils.SumPairedDurationsWithNow(m.durations, time.Time{})
+			m = RecalculateDurations(m)
 			return m, nil
 		case "x":
 			m.list.RemoveItem(m.list.Index())
-			m.durations.RemoveItem(m.list.Index())
-			m.total = timeutils.SumPairedDurationsWithNow(m.durations, time.Now())
+			m.durations = m.durations.RemoveItem(m.list.Index())
+			m = RecalculateDurations(m)
 			return m, nil
 		}
 	}
@@ -159,16 +188,21 @@ func (m model) View() string {
 	if m.quitting {
 		return quitTextStyle.Render("Enjoy your day !")
 	}
-	return m.textInput.View() +
-		"\n" +
-		m.list.View() +
-		"\n" +
-		helperStyle.Render("target ") + targetStyle.Render(timeutils.FormatHM(target)) +
+	return helperStyle.Render("target ") + targetStyle.Render(timeutils.FormatHM(target)) +
 		helperStyle.Render(" • ") +
 		helperStyle.Render("previsional ") + reachedStyle.Render(timeutils.FormatHM(m.totalProvisionnal)) +
 		helperStyle.Render(" • ") +
-		helperStyle.Render("tracked ") + reachedStyle.Render(timeutils.FormatHM(m.total))
-
+		helperStyle.Render("tracked ") + reachedStyle.Render(timeutils.FormatHM(m.total)) +
+		helperStyle.Render(" • ") +
+		helperStyle.Render("exit ") + reachedStyle.Render(m.planned) +
+		helperStyle.Render(" • ") +
+		helperStyle.Render("overtime ") + reachedStyle.Render(timeutils.FormatHM(m.overtime)) +
+		"\n" +
+		m.textInput.View() +
+		"\n" +
+		m.list.View() +
+		"\n" +
+		m.progress.ViewAs(m.percentage)
 }
 
 func main() {
