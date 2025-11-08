@@ -11,7 +11,8 @@
             "request": "launch",
             "mode": "auto",
             "program": "${fileDirname}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "args": ["0830"]
         }
     ]
 }

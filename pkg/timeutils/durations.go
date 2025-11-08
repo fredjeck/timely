@@ -9,15 +9,21 @@ import (
 	"time"
 )
 
-// FormatHM formats a time.Duration into a string in "HH:MM" format.
+// FormatDuration formats a time.Duration into a string in "HH:MM" format.
 // It handles negative durations by prefixing the result with a minus sign.
-func FormatHM(d time.Duration) string {
+func FormatDuration(d time.Duration) string {
 	if d < 0 {
-		return "-" + FormatHM(-d)
+		return "-" + FormatDuration(-d)
 	}
 	h := int(d / time.Hour)
 	m := int((d % time.Hour) / time.Minute)
 	return fmt.Sprintf("%02d:%02d", h, m)
+}
+
+// FormatTime formats a time.Duration into a string in "HH:MM" format.
+// It handles negative durations by prefixing the result with a minus sign.
+func FormatTime(d time.Time) string {
+	return d.Format("15:04")
 }
 
 // Durations represents an ordered collection of time.Time values.

@@ -14,14 +14,16 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/fredjeck/timely/pkg/platform"
 	"github.com/fredjeck/timely/pkg/timeutils"
 )
+
+type systemStartupTime time.Time
 
 const listHeight = 14
 const defaultWidth = 20
 const padding = 4
 const maxWidth = 80
-const target = time.Duration(8*time.Hour + 30*time.Minute)
 
 var (
 	titleStyle        = lipgloss.NewStyle().MarginLeft(2)
@@ -30,9 +32,8 @@ var (
 	paginationStyle   = list.DefaultStyles().PaginationStyle.PaddingLeft(4)
 	helpStyle         = list.DefaultStyles().HelpStyle.PaddingLeft(4).PaddingBottom(1)
 	quitTextStyle     = lipgloss.NewStyle().Margin(1, 0, 2, 4)
-	unreachedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Bold(true)
+	unreachedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff0000ff")).Bold(true)
 	reachedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("34")).Bold(true)
-	targetStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 	helperStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#626262"))
 )
 
@@ -72,20 +73,35 @@ type model struct {
 	percentage        float64
 	quitting          bool
 	progress          progress.Model
+	target            time.Duration
+	startupTime       time.Time
 }
 
-func RecalculateDurations(m model) model {
+func (m model) Append(t time.Time) model {
+	m.durations = m.durations.Append(t)
+
+	items := make([]list.Item, len(m.durations))
+	for i, t := range m.durations.StringSlice() {
+		items[i] = item(t)
+	}
+	m.list.SetItems(items)
+	m.textInput.Reset()
+	m = m.RecalculateDurations()
+	return m
+}
+
+func (m model) RecalculateDurations() model {
 	m.totalProvisionnal = timeutils.SumPairedDurationsWithNow(m.durations, time.Now())
 	m.total = timeutils.SumPairedDurationsWithNow(m.durations, time.Time{})
-	m.overtime = m.total - target
+	m.overtime = m.total - m.target
 	last := m.durations.Last()
 	if !last.IsZero() {
-		remaining := target - m.total
+		remaining := m.target - m.total
 		m.planned = last.Add(remaining).Format("15:04")
 	}
 
 	tmin := m.total.Minutes()
-	ta := target.Minutes()
+	ta := m.target.Minutes()
 	if tmin > ta {
 		m.percentage = 1
 	} else {
@@ -94,7 +110,7 @@ func RecalculateDurations(m model) model {
 	return m
 }
 
-func initialModel() model {
+func initialModel(target time.Duration) model {
 	ti := textinput.New()
 	ti.Placeholder = ""
 	ti.Focus()
@@ -125,6 +141,7 @@ func initialModel() model {
 		totalProvisionnal: 0,
 		quitting:          false,
 		progress:          progress.New(progress.WithScaledGradient("#FF7CCB", "#FDFF8C")),
+		target:            target,
 	}
 }
 
@@ -142,6 +159,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case systemStartupTime:
+		m.startupTime = time.Time(msg)
+		if len(m.durations) == 0 {
+			return m.Append(m.startupTime), nil
+		}
+
 	case tea.KeyMsg:
 		switch keypress := msg.String(); keypress {
 		case "q", "ctrl+c":
@@ -150,23 +173,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			t, err := timeutils.ParseTime(m.textInput.Value())
 			if err != nil {
-				// handle error (e.g., ignore or show a message)
+				m.textInput.Reset()
 				return m, nil
 			}
-			m.durations = m.durations.Append(t)
-
-			items := make([]list.Item, len(m.durations))
-			for i, t := range m.durations.StringSlice() {
-				items[i] = item(t)
-			}
-			m.list.SetItems(items)
-			m.textInput.Reset()
-			m = RecalculateDurations(m)
-			return m, nil
+			return m.Append(t), nil
 		case "x":
 			m.list.RemoveItem(m.list.Index())
 			m.durations = m.durations.RemoveItem(m.list.Index())
-			m = RecalculateDurations(m)
+			m = m.RecalculateDurations()
 			return m, nil
 		}
 	}
@@ -188,15 +202,18 @@ func (m model) View() string {
 	if m.quitting {
 		return quitTextStyle.Render("Enjoy your day !")
 	}
-	return helperStyle.Render("target ") + targetStyle.Render(timeutils.FormatHM(target)) +
-		helperStyle.Render(" • ") +
-		helperStyle.Render("previsional ") + reachedStyle.Render(timeutils.FormatHM(m.totalProvisionnal)) +
-		helperStyle.Render(" • ") +
-		helperStyle.Render("tracked ") + reachedStyle.Render(timeutils.FormatHM(m.total)) +
-		helperStyle.Render(" • ") +
-		helperStyle.Render("exit ") + reachedStyle.Render(m.planned) +
-		helperStyle.Render(" • ") +
-		helperStyle.Render("overtime ") + reachedStyle.Render(timeutils.FormatHM(m.overtime)) +
+
+	style := reachedStyle
+	if m.total < m.target {
+		style = unreachedStyle
+	}
+
+	return style.Render(timeutils.FormatDuration(m.total)) +
+		helperStyle.Render(" / "+timeutils.FormatDuration(m.target)) +
+		helperStyle.Render(" • previsional ") + reachedStyle.Render(timeutils.FormatDuration(m.totalProvisionnal)) +
+		helperStyle.Render(" • start ") + reachedStyle.Render(timeutils.FormatTime(m.startupTime)) +
+		helperStyle.Render(" • exit ") + reachedStyle.Render(m.planned) +
+		helperStyle.Render(" • overtime ") + reachedStyle.Render(timeutils.FormatDuration(m.overtime)) +
 		"\n" +
 		m.textInput.View() +
 		"\n" +
@@ -206,7 +223,29 @@ func (m model) View() string {
 }
 
 func main() {
-	if _, err := tea.NewProgram(initialModel()).Run(); err != nil {
+
+	if len(os.Args) < 2 {
+		fmt.Println("Please provide a target time in HH:MM format as an argument.")
+		os.Exit(1)
+	}
+
+	targetTime, err := timeutils.ParseTime(os.Args[1])
+	if err != nil {
+		fmt.Println("Unknown target time", os.Args[1])
+	}
+	target := time.Duration(targetTime.Hour())*time.Hour + time.Duration(targetTime.Minute())*time.Minute
+
+	p := tea.NewProgram(initialModel(target), tea.WithAltScreen())
+
+	go func() {
+		up, err := platform.Startup()
+		if err != nil {
+			return
+		}
+		p.Send(systemStartupTime(up))
+	}()
+
+	if _, err := p.Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)
 	}
